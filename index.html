@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Xadrez EDCELLTECH</title>
+<style>
+  body { margin:0; background:#1e1e1e; color:#fff; font-family:sans-serif; display:flex; flex-direction:column; align-items:center; }
+  canvas { border:2px solid #fff; margin-top:10px; touch-action:none; }
+  #controls { margin-top:10px; }
+  button { margin:5px; padding:10px 15px; background:#444; color:#fff; border:none; border-radius:6px; cursor:pointer; transition:0.2s; }
+  button:hover { background:#666; }
+  #info { margin-top:15px; font-size:18px; font-weight:bold; }
+</style>
+</head>
+<body>
+
+<h1>♟️ Xadrez EDCELLTECH ♟️</h1>
+<div id="controls">
+  <button onclick="startGame()">Iniciar Jogo</button>
+  <button onclick="resetGame()">Resetar</button>
+  <span style="margin-left:15px;">Pontos Jogador: <span id="score">0</span></span>
+</div>
+<canvas id="board" width="480" height="480"></canvas>
+<div id="info"></div>
+
+<script>
+// ======== Variáveis Globais ========
+const SIZE = 8, TILE = 60;
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+let board = [], selected = null, validMoves = [], turn = 'w';
+let score = 0, gameOver = false;
+
+// Sons de movimento e captura
+const moveSound = new Audio('https://cdn.freesound.org/previews/825/825311_17675683-lq.mp3');
+const captureSound = new Audio('https://cdn.freesound.org/previews/331/331912_3248244-lq.mp3');
+
+// Peças em Unicode
+const piecesUnicode = {
+  'wK':'♔','wQ':'♕','wR':'♖','wB':'♗','wN':'♘','wP':'♙',
+  'bK':'♚','bQ':'♛','bR':'♜','bB':'♝','bN':'♞','bP':'♟'
+};
+
+// ======== Inicialização do tabuleiro ========
+function initBoard(){
+  board = Array(SIZE).fill(null).map(()=>Array(SIZE).fill(null));
+  // Peças pretas
+  board[0] = ['bR','bN','bB','bQ','bK','bB','bN','bR'];
+  board[1] = Array(8).fill('bP');
+  // Peças brancas
+  board[6] = Array(8).fill('wP');
+  board[7] = ['wR','wN','wB','wQ','wK','wB','wN','wR'];
+  drawBoard();
+}
+
+// ======== Desenho do tabuleiro ========
+function drawBoard(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  for(let r=0;r<SIZE;r++){
+    for(let c=0;c<SIZE;c++){
+      ctx.fillStyle = (r+c)%2===0?'#eee':'#555';
+      ctx.fillRect(c*TILE,r*TILE,TILE,TILE);
+      const piece = board[r][c];
+      if(piece){
+        ctx.fillStyle = piece[0]==='w'?'#fff':'#000';
+        ctx.font = '50px Arial';
+        ctx.fillText(piecesUnicode[piece], c*TILE+5, r*TILE+50);
+      }
+    }
+  }
+  if(selected){ // quadrado selecionado
+    ctx.strokeStyle='yellow';
+    ctx.lineWidth=3;
+    ctx.strokeRect(selected[1]*TILE, selected[0]*TILE, TILE, TILE);
+  }
+  validMoves.forEach(m=>{ // jogadas possíveis
+    ctx.fillStyle='rgba(0,255,0,0.7)';
+    ctx.beginPath();
+    ctx.arc(m[1]*TILE+TILE/2, m[0]*TILE+TILE/2, 8, 0, 2*Math.PI);
+    ctx.fill();
+  });
+}
+
+// ======== Movimentos ========
+// Gera todos os movimentos possíveis para uma cor
+function allMoves(color){
+  const moves = [];
+  for(let r=0;r<SIZE;r++){
+    for(let c=0;c<SIZE;c++){
+      if(board[r][c] && board[r][c][0]===color){
+        const pieceMoves = generateMoves(r,c);
+        pieceMoves.forEach(m=>moves.push({from:[r,c],to:m}));
+      }
+    }
+  }
+  return moves;
+}
+
+// Regras de movimento de cada peça
+function generateMoves(r,c){
+  const moves=[];
+  const piece = board[r][c];
+  if(!piece) return moves;
+  const type = piece[1], color = piece[0], dir = color==='w'?-1:1;
+
+  // Peões (avanço simples e captura diagonal)
+  if(type==='P'){
+    if(board[r+dir]?.[c]===null) moves.push([r+dir,c]);
+    if(board[r+dir]?.[c-1]?.[0] && board[r+dir][c-1][0]!==color) moves.push([r+dir,c-1]);
+    if(board[r+dir]?.[c+1]?.[0] && board[r+dir][c+1][0]!==color) moves.push([r+dir,c+1]);
+  }
+  // Torres e Dama (movem em linhas/colunas)
+  if(type==='R' || type==='Q'){ [[1,0],[-1,0],[0,1],[0,-1]].forEach(d=>rayMoves(r,c,d,moves,color)); }
+  // Bispos e Dama (movem em diagonais)
+  if(type==='B' || type==='Q'){ [[1,1],[1,-1],[-1,1],[-1,-1]].forEach(d=>rayMoves(r,c,d,moves,color)); }
+  // Cavalos (movimento em "L")
+  if(type==='N'){
+    [[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]].forEach(d=>{
+      const nr=r+d[0], nc=c+d[1];
+      if(nr>=0 && nr<SIZE && nc>=0 && nc<SIZE && (!board[nr][nc] || board[nr][nc][0]!==color)) moves.push([nr,nc]);
+    });
+  }
+  // Rei (um quadrado em qualquer direção)
+  if(type==='K'){
+    for(let dr=-1;dr<=1;dr++){
+      for(let dc=-1;dc<=1;dc++){
+        if(dr===0 && dc===0) continue;
+        const nr=r+dr,nc=c+dc;
+        if(nr>=0 && nr<SIZE && nc>=0 && nc<SIZE && (!board[nr][nc] || board[nr][nc][0]!==color)) moves.push([nr,nc]);
+      }
+    }
+  }
+  return moves;
+}
+
+// Função auxiliar para movimentos contínuos (torres, bispos e dama)
+function rayMoves(r,c,d,moves,color){
+  let nr=r+d[0], nc=c+d[1];
+  while(nr>=0 && nr<SIZE && nc>=0 && nc<SIZE){
+    if(board[nr][nc]===null){ moves.push([nr,nc]); }
+    else { if(board[nr][nc][0]!==color) moves.push([nr,nc]); break; }
+    nr+=d[0]; nc+=d[1];
+  }
+}
+
+// ======== Jogadas ========
+function movePiece(move){
+  const [fr,fc] = move.from, [tr,tc] = move.to;
+  if(board[tr][tc]) captureSound.play(); else moveSound.play();
+  board[tr][tc]=board[fr][fc]; board[fr][fc]=null;
+  // Promoção de peões
+  if(board[tr][tc]==='wP' && tr===0) board[tr][tc]='wQ';
+  if(board[tr][tc]==='bP' && tr===7) board[tr][tc]='bQ';
+}
+
+// ======== IA (minimax com avaliação de peças) ========
+function aiMove(){
+  const best = minimax(board,3,true,-Infinity,Infinity)[1];
+  if(best) movePiece(best);
+  turn='w'; drawBoard(); updateTurnInfo(); checkGameStatus();
+}
+
+// Algoritmo minimax com poda alpha-beta
+function minimax(tempBoard,depth,isMax,alpha,beta){
+  const color = isMax?'b':'w';
+  const moves = allMoves(color);
+  if(depth===0 || moves.length===0) return [evaluateBoard(tempBoard),null];
+  let bestMove=null;
+  if(isMax){
+    let maxEval=-Infinity;
+    for(const move of moves){
+      const backup = makeTempMove(move,tempBoard);
+      const [evalScore]=minimax(tempBoard,depth-1,false,alpha,beta);
+      undoTempMove(move,tempBoard,backup);
+      if(evalScore>maxEval){ maxEval=evalScore; bestMove=move; }
+      alpha=Math.max(alpha,evalScore);
+      if(beta<=alpha) break;
+    }
+    return [maxEval,bestMove];
+  } else {
+    let minEval=Infinity;
+    for(const move of moves){
+      const backup = makeTempMove(move,tempBoard);
+      const [evalScore]=minimax(tempBoard,depth-1,true,alpha,beta);
+      undoTempMove(move,tempBoard,backup);
+      if(evalScore<minEval){ minEval=evalScore; bestMove=move; }
+      beta=Math.min(beta,evalScore);
+      if(beta<=alpha) break;
+    }
+    return [minEval,bestMove];
+  }
+}
+
+// Executa movimento temporário (para simulação do minimax)
+function makeTempMove(move,tempBoard){
+  const [fr,fc]=move.from, [tr,tc]=move.to;
+  const backup=tempBoard[tr][tc];
+  tempBoard[tr][tc]=tempBoard[fr][fc]; tempBoard[fr][fc]=null;
+  return backup;
+}
+function undoTempMove(move,tempBoard,backup){
+  const [fr,fc]=move.from, [tr,tc]=move.to;
+  tempBoard[fr][fc]=tempBoard[tr][tc]; tempBoard[tr][tc]=backup;
+}
+
+// Avaliação da posição com base na importância de cada peça
+function evaluateBoard(b){
+  let score=0;
+  for(let r=0;r<SIZE;r++){
+    for(let c=0;c<SIZE;c++){
+      if(b[r][c]) score += (b[r][c][0]==='b'?1:-1)*pieceValue(b[r][c]);
+    }
+  }
+  return score;
+}
+
+// Valores das peças (Rei = peça mais importante)
+function pieceValue(piece){
+  if(!piece) return 0;
+  switch(piece[1]){
+    case 'K': return 1000; // Rei: peça vital, perder = fim do jogo
+    case 'Q': return 9;    // Dama: peça mais poderosa
+    case 'R': return 5;    // Torre: forte em linhas e colunas
+    case 'B': return 3;    // Bispo: domina diagonais
+    case 'N': return 3;    // Cavalo: movimentos em "L", único que salta
+    case 'P': return 1;    // Peão: base estratégica, pode virar Dama
+  }
+  return 0;
+}
+
+// ======== Cheque e Xeque Mate ========
+function inCheck(color){
+  const kingPos = findKing(color);
+  const enemyMoves = allMoves(color==='w'?'b':'w');
+  return enemyMoves.some(m=>m.to[0]===kingPos[0] && m.to[1]===kingPos[1]);
+}
+function findKing(color){
+  for(let r=0;r<SIZE;r++){ for(let c=0;c<SIZE;c++){
+    if(board[r][c]===color+'K') return [r,c];
+  }} return null;
+}
+
+function checkGameStatus(){
+  const moves = allMoves(turn);
+  let status='';
+  if(moves.length===0){
+    if(inCheck(turn)){
+      status='♟️ Xeque-Mate! ' + (turn==='w'?'Preto vence!':'Branco vence!');
+    } else {
+      status='Empate (afogamento)!';
+    }
+    gameOver=true;
+  } else {
+    if(inCheck(turn)) status='⚠️ Cheque contra ' + (turn==='w'?'Branco!':'Preto!');
+    else status='Turno: '+(turn==='w'?'Branco':'Preto');
+  }
+  document.getElementById('info').innerText=status;
+}
+
+// ======== Eventos de clique ========
+canvas.addEventListener('click',e=>{
+  if(gameOver || turn!=='w') return;
+  const rect = canvas.getBoundingClientRect();
+  const c = Math.floor((e.clientX-rect.left)/TILE);
+  const r = Math.floor((e.clientY-rect.top)/TILE);
+  if(selected){
+    const move={from:selected,to:[r,c]};
+    if(validMoves.some(m=>m[0]===r && m[1]===c)){
+      movePiece(move);
+      selected=null; validMoves=[];
+      turn='b'; drawBoard(); updateTurnInfo(); checkGameStatus();
+      if(!gameOver) setTimeout(aiMove,300);
+    } else { selected=[r,c]; validMoves=generateMoves(r,c); }
+  } else if(board[r][c] && board[r][c][0]==='w'){
+    selected=[r,c]; validMoves=generateMoves(r,c);
+  }
+  drawBoard();
+});
+
+// ======== Controles ========
+function startGame(){ gameOver=false; turn='w'; score=0;
+  document.getElementById('score').innerText=score;
+  initBoard(); checkGameStatus();
+}
+function resetGame(){ startGame(); }
+function updateTurnInfo(){ document.getElementById('score').innerText=score; }
+
+// Inicializar automaticamente
+startGame();
+</script>
+</body>
+</html>
